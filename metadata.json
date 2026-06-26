@@ -1,0 +1,6 @@
+{
+  "name": "DriveFetch",
+  "description": "Cloud-to-cloud file downloader that streams files directly from URLs to your Google Drive account, supporting progress tracking and concurrency.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
