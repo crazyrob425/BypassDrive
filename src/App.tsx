@@ -7,8 +7,8 @@ import { useState, useEffect, FormEvent } from 'react';
 import { 
   DownloadCloud, CheckCircle2, AlertCircle, Loader2, Link as LinkIcon, 
   FileIcon, X, Plus, Terminal, Bug, Skull, Coffee, Folder, FolderOpen, 
-  ChevronRight, RefreshCw, HardDrive, Database, Send, Sparkles, LayoutGrid, 
-  FileText, ShieldCheck, Cpu, Search, FileArchive, Check
+  ChevronRight, ChevronLeft, ChevronUp, ChevronDown, RefreshCw, HardDrive, Database, Send, Sparkles, LayoutGrid, 
+  FileText, ShieldCheck, Cpu, Search, FileArchive, Check, Save, Pencil, Trash2, Download, Info, Code, Play, Pause, HelpCircle
 } from 'lucide-react';
 import { initAuth, googleSignIn, getAccessToken, logout } from './auth';
 import { User } from 'firebase/auth';
@@ -54,15 +54,84 @@ export default function App() {
   const [zipFileNameInput, setZipFileNameInput] = useState('');
   const [showZipDialog, setShowZipDialog] = useState(false);
 
+  // AI Connection Settings State
+  const [showAiSettings, setShowAiSettings] = useState(false);
+  const [aiStatus, setAiStatus] = useState<'active' | 'backup'>('active');
+  const [customGeminiKey, setCustomGeminiKey] = useState(localStorage.getItem('customGeminiKey') || '');
+  const [customOpenAiKey, setCustomOpenAiKey] = useState(localStorage.getItem('customOpenAiKey') || '');
+  const [pollinationEnabled, setPollinationEnabled] = useState(localStorage.getItem('pollinationEnabled') !== 'false');
+
+  // Theme State
+  const [theme, setTheme] = useState<'hacker' | 'elite'>(
+    (localStorage.getItem('app_theme') as 'hacker' | 'elite') || 'hacker'
+  );
+
+  // Layout Collapse States
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [showTelemetry, setShowTelemetry] = useState(true);
+  const [showFolders, setShowFolders] = useState(true);
+  const [showSysStatus, setShowSysStatus] = useState(true);
+  const [showBento, setShowBento] = useState(true);
+  const [showIntel, setShowIntel] = useState(true);
+  
+  // r00tBypass Chat State
+  const [showRootChat, setShowRootChat] = useState(false);
+  const [rootChatMessages, setRootChatMessages] = useState<Array<{role: 'user'|'r00t', text: string}>>([
+    { role: 'r00t', text: 'Oh look, another user. What do you want? I can control this entire app, so speak up or get out of my domain.' }
+  ]);
+  const [rootChatInput, setRootChatInput] = useState('');
+  const [isRootThinking, setIsRootThinking] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('app_theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem('customGeminiKey', customGeminiKey);
+    localStorage.setItem('customOpenAiKey', customOpenAiKey);
+    localStorage.setItem('pollinationEnabled', String(pollinationEnabled));
+  }, [customGeminiKey, customOpenAiKey, pollinationEnabled]);
+
   // Quick-Look preview states
   const [previewFileId, setPreviewFileId] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<{
     metadata: any;
     previewContent: string;
+    previewType: string;
     isPreviewable: boolean;
   } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [infoFile, setInfoFile] = useState<any | null>(null);
+  const [infoNotes, setInfoNotes] = useState('');
+  const [savingNotes, setSavingNotes] = useState(false);
+
+  // Move/Rename states
+  const [renameFile, setRenameFile] = useState<any | null>(null);
+  const [renameInput, setRenameInput] = useState('');
+  const [moveFolderId, setMoveFolderId] = useState('');
+  const [renameMoveLoading, setRenameMoveLoading] = useState(false);
+  const [allFolders, setAllFolders] = useState<any[]>([]);
+  
+  // Context Menu state
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    file: any;
+  } | null>(null);
+
+  // Close context menu on outside click
+  useEffect(() => {
+    const handleClick = () => {
+      if (contextMenu?.visible) {
+        setContextMenu(null);
+      }
+    };
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, [contextMenu]);
+
   
   // AI Analyze Tracking
   const [analyzingFileIds, setAnalyzingFileIds] = useState<string[]>([]);
@@ -175,6 +244,11 @@ export default function App() {
     e.preventDefault();
     if (!url.trim()) return;
 
+    let finalUrl = url.trim();
+    if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+      finalUrl = 'http://' + finalUrl;
+    }
+
     const accessToken = await getAccessToken();
     if (!accessToken) {
       setNeedsAuth(true);
@@ -186,7 +260,7 @@ export default function App() {
       const response = await fetch('/api/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim(), filename: filename.trim(), accessToken }),
+        body: JSON.stringify({ url: finalUrl, filename: filename.trim(), accessToken }),
       });
 
       if (!response.ok) {
@@ -198,7 +272,7 @@ export default function App() {
 
       const newTask: Task = {
         id: taskId,
-        url: url.trim(),
+        url: finalUrl,
         filename: filename.trim() || 'Auto-detect',
         status: 'pending',
         progress: 0,
@@ -241,6 +315,11 @@ export default function App() {
     e.preventDefault();
     if (!scrapeUrl.trim()) return;
 
+    let finalUrl = scrapeUrl.trim();
+    if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+      finalUrl = 'http://' + finalUrl;
+    }
+
     setScrapeLoading(true);
     setScrapeError(null);
     try {
@@ -254,10 +333,11 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          url: scrapeUrl,
+          url: finalUrl,
           folderId: currentFolderId,
           accessToken: token,
-          ragSessionId: ragSessionId // Automatically hot-inject if RAG session is active
+          ragSessionId: ragSessionId,
+          aiSettings: { customGeminiKey, customOpenAiKey, pollinationEnabled }
         })
       });
 
@@ -301,6 +381,91 @@ export default function App() {
     }
   };
 
+  const handleRenameMoveClick = async (file: any) => {
+    setRenameFile(file);
+    setRenameInput(file.name);
+    
+    // Find current parent from file or assume currentFolderId
+    let currentParent = currentFolderId;
+    if (file.parents && file.parents.length > 0) {
+      currentParent = file.parents[0];
+    }
+    setMoveFolderId(currentParent);
+    
+    // Fetch folders
+    try {
+      const token = await getAccessToken();
+      if (!token) return;
+      const res = await fetch('/api/drive/folders', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAllFolders([{ id: 'root', name: 'My Drive' }, ...data.folders]);
+      }
+    } catch (err) {
+      console.error('Error fetching folders:', err);
+    }
+  };
+
+  const submitRenameMove = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!renameFile) return;
+    
+    setRenameMoveLoading(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        setNeedsAuth(true);
+        return;
+      }
+      
+      let currentParent = currentFolderId;
+      if (renameFile.parents && renameFile.parents.length > 0) {
+        currentParent = renameFile.parents[0];
+      }
+
+      const body: any = {};
+      if (renameInput !== renameFile.name) body.name = renameInput;
+      if (moveFolderId !== currentParent) {
+        body.newParentId = moveFolderId;
+        body.currentParentId = currentParent;
+      }
+
+      const res = await fetch(`/api/drive/files/${renameFile.id}/move-rename`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        
+        // Update local state
+        if (moveFolderId !== currentParent && currentFolderId !== 'search') {
+          // File moved out of current folder
+          setExplorerFiles(prev => prev.filter(f => f.id !== renameFile.id));
+        } else {
+          // File renamed but stays in current folder
+          setExplorerFiles(prev => prev.map(f => f.id === renameFile.id ? { ...f, name: data.name } : f));
+        }
+        setRenameFile(null);
+      }
+    } catch (err) {
+      console.error('Error renaming/moving file:', err);
+    } finally {
+      setRenameMoveLoading(false);
+    }
+  };
+
+  const handleFileInfoClick = (file: any) => {
+    setInfoFile(file);
+    setInfoNotes(file.description || '');
+  };
+
   const handleFilePreviewClick = async (fileId: string) => {
     setPreviewFileId(fileId);
     setPreviewLoading(true);
@@ -328,9 +493,38 @@ export default function App() {
     }
   };
 
+  const handleSaveNotes = async () => {
+    if (!infoFile) return;
+    setSavingNotes(true);
+    const token = await getAccessToken();
+    if (!token) {
+      setNeedsAuth(true);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/drive/files/${infoFile.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ description: infoNotes })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setInfoFile({ ...infoFile, description: data.description });
+        setExplorerFiles(prev => prev.map(f => f.id === infoFile.id ? { ...f, description: data.description } : f));
+      }
+    } catch (err) {
+      console.error('Error saving notes:', err);
+    } finally {
+      setSavingNotes(false);
+    }
+  };
+
   const handleQueryFile = () => {
-    if (!previewData) return;
-    const { name } = previewData.metadata;
+    if (!infoFile) return;
+    const { name } = infoFile;
     
     // Auto-populate input
     setRagInput(`Could you analyze the file "${name}" and summarize its core insights?`);
@@ -347,8 +541,58 @@ export default function App() {
       ]);
     }
     
-    // Close the preview modal
-    setPreviewFileId(null);
+    // Close the info drawer
+    setInfoFile(null);
+  };
+
+  const handleBatchAITag = async () => {
+    if (selectedFileIds.length === 0) return;
+    const token = await getAccessToken();
+    if (!token) {
+      setNeedsAuth(true);
+      return;
+    }
+
+    setBatchActionLoading(true);
+    try {
+      await Promise.allSettled(
+        selectedFileIds.map(async (fileId) => {
+          setAnalyzingFileIds(prev => [...prev, fileId]);
+          try {
+            const res = await fetch(`/api/drive/files/${fileId}/ai-analyze`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                aiSettings: { customGeminiKey, customOpenAiKey, pollinationEnabled }
+              })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              console.error(`Failed to analyze file ${fileId}:`, data.error);
+            } else if (data.usedBackup) {
+              setAiStatus('backup');
+            }
+          } catch (err) {
+             console.error(`Error analyzing file ${fileId}:`, err);
+          } finally {
+            setAnalyzingFileIds(prev => prev.filter(id => id !== fileId));
+          }
+        })
+      );
+      
+      // Reload current folder contents to show updated metadata
+      if (currentFolderId !== 'search') {
+        fetchFolderContents(currentFolderId);
+      }
+    } catch (err) {
+      console.error('Error during batch AI tagging:', err);
+    } finally {
+      setBatchActionLoading(false);
+      setSelectedFileIds([]);
+    }
   };
 
   const handleBatchRAGIngest = async () => {
@@ -421,7 +665,7 @@ export default function App() {
     }
 
     setBatchActionLoading(true);
-    const zipName = zipFileNameInput.trim() || `cyber_archive_${Math.floor(Math.random() * 9000 + 1000)}.zip`;
+    const zipName = zipFileNameInput.trim() || `archive_${Math.floor(Math.random() * 9000 + 1000)}.zip`;
 
     try {
       const res = await fetch('/api/drive/zip-batch', {
@@ -450,7 +694,7 @@ export default function App() {
           ...prev,
           {
             sender: 'ai',
-            text: `### 📦 [BULK COMPRESSION MATRIX SUCCESS]\n\nCreated zip file **"${data.name}"** containing **${data.processedCount}** files.\n\n* **Storage Location:** Saved in active Drive folder.\n* **Binary Footprint:** ${formatBytes(Number(data.size))}`,
+            text: `### 📦 Bulk Compression Success\n\nCreated zip file **"${data.name}"** containing **${data.processedCount}** files.\n\n* **Storage Location:** Saved in active Drive folder.\n* **Size:** ${formatBytes(Number(data.size))}`,
             timestamp: new Date()
           }
         ]);
@@ -473,6 +717,106 @@ export default function App() {
     }
   };
 
+  const handleDeleteFile = async (file: any) => {
+    if (!window.confirm(`Are you sure you want to move "${file.name}" to trash?`)) return;
+    
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        setNeedsAuth(true);
+        return;
+      }
+      const res = await fetch(`/api/drive/files/${file.id}/trash`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setExplorerFiles(prev => prev.filter(f => f.id !== file.id));
+      }
+    } catch (err) {
+      console.error('Error trashing file:', err);
+    }
+  };
+
+  const handleDownloadFile = (file: any) => {
+    if (file.webViewLink) {
+      window.open(file.webViewLink, '_blank');
+    }
+  };
+
+  const handleDropMove = async (draggedFileId: string, currentParentId: string, targetFolderId: string) => {
+    if (!draggedFileId || !targetFolderId || draggedFileId === targetFolderId) return;
+
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        setNeedsAuth(true);
+        return;
+      }
+      
+      const res = await fetch(`/api/drive/files/${draggedFileId}/move-rename`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          newParentId: targetFolderId,
+          currentParentId: currentParentId
+        })
+      });
+      
+      if (res.ok) {
+        // Remove from current view
+        setExplorerFiles(prev => prev.filter(f => f.id !== draggedFileId));
+      } else {
+        console.error('Failed to move file');
+      }
+    } catch (err) {
+      console.error('Error moving file via drag and drop:', err);
+    }
+  };
+
+  const handleCompressFolder = async (folder: any) => {
+    setBatchActionLoading(true);
+    const zipName = `archive_${folder.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${Math.floor(Math.random() * 9000 + 1000)}.zip`;
+
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        setNeedsAuth(true);
+        setBatchActionLoading(false);
+        return;
+      }
+      const res = await fetch('/api/drive/zip-batch', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          fileIds: [folder.id],
+          zipFileName: zipName,
+          targetFolderId: currentFolderId === 'search' ? 'root' : currentFolderId
+        })
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        // Add zip to current folder if we are not in search
+        if (currentFolderId !== 'search') {
+          fetchFolderContents(currentFolderId);
+        }
+      } else {
+        console.error('Compression failed');
+      }
+    } catch (err) {
+      console.error('Error compressing folder:', err);
+    } finally {
+      setBatchActionLoading(false);
+    }
+  };
+
   const handleAIAnalyzeFile = async (fileId: string) => {
     const token = await getAccessToken();
     if (!token) {
@@ -485,14 +829,19 @@ export default function App() {
       const res = await fetch(`/api/drive/files/${fileId}/ai-analyze`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`
-        }
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          aiSettings: { customGeminiKey, customOpenAiKey, pollinationEnabled }
+        })
       });
       
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Failed to analyze file');
       }
+      if (data.usedBackup) setAiStatus('backup');
       
       // Reload the current folder to reflect renamed files
       loadDriveData(currentFolderId);
@@ -600,7 +949,11 @@ export default function App() {
       const res = await fetch('/api/drive/rag/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: ragSessionId, message: userMsg })
+        body: JSON.stringify({ 
+          sessionId: ragSessionId, 
+          message: userMsg,
+          aiSettings: { customGeminiKey, customOpenAiKey, pollinationEnabled }
+        })
       });
 
       if (!res.ok) {
@@ -608,6 +961,7 @@ export default function App() {
       }
 
       const data = await res.json();
+      if (data.usedBackup) setAiStatus('backup');
       setRagMessages(prev => [
         ...prev,
         { sender: 'ai', text: data.responseText, timestamp: new Date() }
@@ -639,8 +993,68 @@ export default function App() {
     }
   };
 
+  const handleRootChatSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!rootChatInput.trim() || isRootThinking) return;
+
+    const userMsg = rootChatInput.trim();
+    setRootChatInput('');
+    setRootChatMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+    setIsRootThinking(true);
+
+    try {
+      const appState = {
+        activeTab,
+        theme,
+        hasUser: !!user,
+        currentFolderId,
+        scrapedInfo
+      };
+
+      const res = await fetch('/api/root-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          message: userMsg, 
+          appState,
+          aiSettings: { customGeminiKey, customOpenAiKey, pollinationEnabled }
+        })
+      });
+
+      if (!res.ok) throw new Error('r00t chat request failed');
+      const data = await res.json();
+      
+      let finalReply = data.reply || "I did something but I refuse to explain it.";
+      setRootChatMessages(prev => [...prev, { role: 'r00t', text: finalReply }]);
+
+      if (data.action && data.action.type !== 'NONE') {
+        const type = data.action.type;
+        const payload = data.action.payload || {};
+        console.log("r00t executing action:", type, payload);
+
+        if (type === 'CHANGE_TAB') {
+          if (payload.tab) setActiveTab(payload.tab);
+        } else if (type === 'SET_THEME') {
+          if (payload.theme) setTheme(payload.theme);
+        } else if (type === 'START_DOWNLOAD' || type === 'RAG_INJECT') {
+          if (payload.url) {
+            setScrapeUrl(payload.url);
+            setActiveTab('downloads');
+            setTimeout(() => {
+              handleScrapeSubmit({ preventDefault: () => {} } as FormEvent);
+            }, 100);
+          }
+        }
+      }
+    } catch (err: any) {
+      setRootChatMessages(prev => [...prev, { role: 'r00t', text: "Error connecting to my core processor. " + err.message }]);
+    } finally {
+      setIsRootThinking(false);
+    }
+  };
+
   return (
-    <div className="h-screen w-full bg-zinc-950 bg-grid text-emerald-50 font-sans selection:bg-emerald-500/30 flex flex-col overflow-hidden relative">
+    <div className={`h-screen w-full bg-zinc-950 bg-grid text-emerald-50 font-sans selection:bg-emerald-500/30 flex flex-col overflow-hidden relative ${theme === 'elite' ? 'theme-elite' : ''}`}>
       {/* Scanline overlay */}
       <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_4px,3px_100%] z-50 opacity-15" />
       
@@ -653,11 +1067,38 @@ export default function App() {
              <Coffee className="w-3 h-3 text-emerald-300 absolute bottom-1 right-1 relative z-10 drop-shadow-[0_0_5px_rgba(0,255,128,0.8)]" />
           </div>
           <div className="flex flex-col">
-            <span className="font-bold text-2xl tracking-widest text-emerald-400 text-glow uppercase">Drive Bypass</span>
-            <span className="text-[10px] text-emerald-500/70 font-mono tracking-[0.2em] -mt-0.5">"Works on my machine"</span>
+            <span className="font-bold text-2xl tracking-widest text-emerald-400 text-glow uppercase flex items-center gap-3">
+              Drive Bypass
+              <button 
+                onClick={() => setShowAiSettings(true)}
+                className={`text-[10px] tracking-normal font-mono px-2 py-0.5 rounded border transition-colors flex items-center gap-1.5 cursor-pointer ${
+                  aiStatus === 'backup' 
+                    ? 'border-yellow-500/50 text-yellow-500 hover:bg-yellow-500/10' 
+                    : 'border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10'
+                }`}
+              >
+                <div className={`w-1.5 h-1.5 rounded-full ${aiStatus === 'backup' ? 'bg-yellow-500' : 'bg-emerald-500'} animate-pulse`}></div>
+                {aiStatus === 'backup' ? 'BACKUP (SLOW) CONNECTION' : 'AI ACTIVE'}
+              </button>
+            </span>
+            <span className="text-[10px] text-emerald-500/70 font-mono tracking-[0.2em] -mt-0.5 flex items-center">
+              "Keep that 
+              <img src="https://unpkg.com/emoji-datasource-apple@15.0.1/img/apple/64/1f4a9.png" alt="poop" className="w-6 h-6 mx-1 inline-block drop-shadow-md -mt-1" />
+              in the cloud.."
+            </span>
           </div>
         </div>
         <div className="flex items-center space-x-6">
+          <button
+            onClick={() => setTheme(theme === 'hacker' ? 'elite' : 'hacker')}
+            className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded border transition-all cursor-pointer ${
+              theme === 'elite' 
+                ? 'bg-zinc-800 text-emerald-500 border-emerald-500 hover:bg-zinc-900' 
+                : 'bg-emerald-950/30 text-emerald-400 border-emerald-500/50 hover:bg-emerald-950/50'
+            }`}
+          >
+            {theme === 'elite' ? 'Switch to Hacker Theme' : 'Switch to Elite Theme'}
+          </button>
           {user ? (
             <div className="flex items-center space-x-3 text-sm text-emerald-500 font-mono">
               <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse shadow-[0_0_8px_#00ff80]"></div>
@@ -680,11 +1121,26 @@ export default function App() {
 
       <main className="flex-1 flex overflow-hidden p-6 gap-6 max-w-[1600px] mx-auto w-full relative z-10">
         {/* Sidebar */}
-        <aside className="w-80 flex flex-col gap-6 shrink-0">
-          <div className="cyber-border p-6 shadow-lg">
-            {needsAuth ? (
-              <div className="text-center py-4">
-                <div className="w-12 h-12 border border-emerald-500/30 bg-zinc-900/50 rounded flex items-center justify-center mx-auto mb-4 relative overflow-hidden group">
+        {showSidebar ? (
+          <aside className="w-80 flex flex-col gap-6 shrink-0 relative group">
+            <button 
+              onClick={() => setShowSidebar(false)}
+              className="absolute -right-3 top-1/2 -translate-y-1/2 z-20 bg-zinc-900 border border-emerald-500/50 text-emerald-500 rounded-full p-0.5 opacity-0 group-hover:opacity-100 hover:bg-emerald-950 transition-all cursor-pointer shadow-[0_0_10px_rgba(0,255,128,0.3)]"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <div className={`cyber-border shadow-lg flex flex-col transition-all overflow-hidden ${showFolders ? '' : 'h-[50px] shrink-0'}`}>
+              <div className="flex justify-between items-center px-6 py-4 border-b border-emerald-500/10 cursor-pointer hover:bg-emerald-500/5 transition-colors select-none" onClick={() => setShowFolders(!showFolders)}>
+                <h2 className="text-xs font-bold uppercase tracking-widest text-emerald-500/70 m-0 border-none pb-0">{needsAuth ? 'Authentication' : 'Operations'}</h2>
+                <button className="text-emerald-500 hover:text-emerald-300 transition-colors">
+                  {showFolders ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </button>
+              </div>
+              {showFolders && (
+              <div className="p-6">
+              {needsAuth ? (
+                <div className="text-center py-4">
+                  <div className="w-12 h-12 border border-emerald-500/30 bg-zinc-900/50 rounded flex items-center justify-center mx-auto mb-4 relative overflow-hidden group">
                   <div className="absolute inset-0 bg-emerald-500/10 group-hover:bg-emerald-500/20 transition-colors" />
                   <DownloadCloud className="w-6 h-6 text-emerald-400" />
                 </div>
@@ -747,11 +1203,11 @@ export default function App() {
                       <label htmlFor="url" className="text-[9px] font-mono text-emerald-500 uppercase tracking-widest">File Link (URL)</label>
                       <input
                         id="url"
-                        type="url"
+                        type="text"
                         required
                         value={url}
                         onChange={(e) => setUrl(e.target.value)}
-                        placeholder="https://server/data.pkg"
+                        placeholder="http://example.onion/file.zip or https://server/data.pkg"
                         className="w-full px-3 py-2 bg-zinc-950/80 border border-emerald-500/30 rounded text-emerald-300 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400 placeholder-emerald-900/40 shadow-[inset_0_0_10px_rgba(0,255,128,0.05)] transition-all"
                       />
                     </div>
@@ -817,11 +1273,19 @@ export default function App() {
                 )}
               </>
             )}
+            </div>
+            )}
           </div>
 
-          <div className="cyber-border p-6 shadow-lg flex-1">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-emerald-500/70 mb-4 border-b border-emerald-500/20 pb-2">System Status</h2>
-            <div className="space-y-4">
+          <div className={`cyber-border shadow-lg flex flex-col ${showSysStatus ? 'flex-1' : 'shrink-0'}`}>
+            <div className="flex justify-between items-center px-6 py-4 border-b border-emerald-500/10 cursor-pointer hover:bg-emerald-500/5 transition-colors select-none" onClick={() => setShowSysStatus(!showSysStatus)}>
+              <h2 className="text-xs font-bold uppercase tracking-widest text-emerald-500/70 m-0 border-none pb-0">System Status</h2>
+              <button className="text-emerald-500 hover:text-emerald-300 transition-colors">
+                {showSysStatus ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+            </div>
+            {showSysStatus && (
+            <div className="p-6 space-y-4">
               <div className="flex items-end justify-between">
                 <div className="text-2xl font-bold font-mono text-emerald-400 text-glow">Ready</div>
               </div>
@@ -836,8 +1300,19 @@ export default function App() {
                 </div>
               )}
             </div>
+            )}
           </div>
         </aside>
+        ) : (
+          <div className="flex flex-col justify-center shrink-0 w-6 relative border-r border-emerald-500/20 bg-zinc-950/40">
+            <button 
+              onClick={() => setShowSidebar(true)}
+              className="absolute -right-3 top-1/2 -translate-y-1/2 z-20 bg-zinc-900 border border-emerald-500/50 text-emerald-500 rounded-full p-0.5 hover:bg-emerald-950 transition-all cursor-pointer shadow-[0_0_10px_rgba(0,255,128,0.3)]"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         {/* Main Content Area: Tabbed layout */}
         <section className="flex-1 flex flex-col cyber-border shadow-lg overflow-hidden min-w-0 bg-zinc-950/60 backdrop-blur-md">
@@ -851,7 +1326,7 @@ export default function App() {
                   : 'text-emerald-600 hover:text-emerald-400 hover:bg-emerald-950/25'
               }`}
             >
-              [ 01 // Active Downloads ]
+              Active Downloads
             </button>
             <button 
               onClick={() => {
@@ -863,7 +1338,7 @@ export default function App() {
                   : 'text-emerald-600 hover:text-emerald-400 hover:bg-emerald-950/25'
               }`}
             >
-              [ 02 // Drive Explorer & RAG Intel ]
+              Drive Explorer & RAG Intel
             </button>
           </div>
 
@@ -1007,8 +1482,16 @@ export default function App() {
                 ) : (
                   <div className="flex-1 flex flex-col overflow-hidden">
                     {/* Bento Statistics Widgets */}
-                    <div className="p-6 grid grid-cols-1 sm:grid-cols-3 gap-4 border-b border-emerald-500/20 shrink-0 bg-zinc-950/20">
-                      {/* Storage Quota Widget */}
+                    <div className="border-b border-emerald-500/20 shrink-0 bg-zinc-950/20 flex flex-col">
+                      <div className="flex justify-between items-center px-6 py-2 border-b border-emerald-500/10 cursor-pointer hover:bg-emerald-500/5 transition-colors select-none" onClick={() => setShowBento(!showBento)}>
+                         <span className="text-[10px] font-mono text-emerald-500 uppercase tracking-widest font-bold">System Statistics</span>
+                         <button className="text-emerald-500 hover:text-emerald-300 transition-colors">
+                           {showBento ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                         </button>
+                      </div>
+                      {showBento && (
+                        <div className="p-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                          {/* Storage Quota Widget */}
                       <div className="cyber-border-thin bg-zinc-900/40 p-4 flex flex-col justify-between relative overflow-hidden shadow-md">
                         <div className="absolute top-1 right-2"><HardDrive className="w-4 h-4 text-emerald-600/60" /></div>
                         <span className="text-[10px] font-mono text-emerald-500 uppercase tracking-widest">DRIVE CAPACITY</span>
@@ -1054,7 +1537,7 @@ export default function App() {
                         <span className="text-[10px] font-mono text-emerald-500 uppercase tracking-widest">AI RAG BUFFER</span>
                         <div className="mt-2 flex items-baseline justify-between">
                           <div className="text-xs font-bold font-mono text-emerald-300 uppercase">
-                            {ragSessionId ? "MATRIX SYNCED" : "BUFFER IDLE"}
+                            {ragSessionId ? "RAG Synced" : "Idle"}
                           </div>
                           <span className="text-[9px] font-mono text-emerald-500/80 uppercase">
                             {ragSessionId ? "Context Committed" : "Select folder to map"}
@@ -1069,6 +1552,8 @@ export default function App() {
                           </button>
                         )}
                       </div>
+                      </div>
+                    )}
                     </div>
 
                     {/* Directory Navigation & Actions */}
@@ -1139,7 +1624,7 @@ export default function App() {
                         {explorerLoading ? (
                           <div className="absolute inset-0 flex flex-col items-center justify-center font-mono space-y-4 bg-zinc-950/50">
                             <Loader2 className="w-8 h-8 animate-spin text-emerald-400 shadow-glow" />
-                            <p className="text-xs text-emerald-500 tracking-wider">RETRIVING REMOTE INODES...</p>
+                            <p className="text-xs text-emerald-500 tracking-wider">Loading folder contents...</p>
                           </div>
                         ) : (
                           <div className="p-6">
@@ -1149,7 +1634,7 @@ export default function App() {
                                 <div className="flex items-center gap-3">
                                   <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
                                   <span className="text-xs text-emerald-300 font-mono uppercase font-bold">
-                                    [BATCH SELECTION] INODES IDENTIFIED: <span className="text-emerald-100 underline text-sm">{selectedFileIds.length}</span>
+                                    Batch Selection Identified: <span className="text-emerald-100 underline text-sm">{selectedFileIds.length}</span>
                                   </span>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
@@ -1158,6 +1643,14 @@ export default function App() {
                                     className="px-3 py-1.5 border border-emerald-500/30 hover:border-emerald-500/60 hover:bg-emerald-500/5 text-[10px] text-emerald-500 rounded font-bold uppercase transition-all cursor-pointer"
                                   >
                                     Reset Selection
+                                  </button>
+                                  <button
+                                    onClick={handleBatchAITag}
+                                    disabled={batchActionLoading}
+                                    className="px-4 py-1.5 bg-indigo-500/15 border border-indigo-500/50 hover:bg-indigo-500/30 hover:border-indigo-400 text-indigo-400 hover:text-glow text-[10px] rounded font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                                  >
+                                    {batchActionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                                    Batch AI Tag
                                   </button>
                                   <button
                                     onClick={handleBatchRAGIngest}
@@ -1169,7 +1662,7 @@ export default function App() {
                                   </button>
                                   <button
                                     onClick={() => {
-                                      setZipFileNameInput(`cyber_archive_${Math.floor(Math.random() * 9000 + 1000)}.zip`);
+                                      setZipFileNameInput(`archive_${Math.floor(Math.random() * 9000 + 1000)}.zip`);
                                       setShowZipDialog(true);
                                     }}
                                     disabled={batchActionLoading}
@@ -1202,7 +1695,13 @@ export default function App() {
                                           className="rounded border-emerald-500/30 text-emerald-500 bg-zinc-950 focus:ring-emerald-500/50 cursor-pointer"
                                         />
                                       </th>
-                                      <th className="p-3 uppercase tracking-wider font-bold">Name</th>
+                                      <th className="p-3 uppercase tracking-wider font-bold">
+                                        Name {selectedFileIds.length > 0 && (
+                                          <span className="ml-2 px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px]">
+                                            {selectedFileIds.length} selected
+                                          </span>
+                                        )}
+                                      </th>
                                       <th className="p-3 uppercase tracking-wider font-bold">Mime Type</th>
                                       <th className="p-3 uppercase tracking-wider font-bold text-right">Size</th>
                                       <th className="p-3 uppercase tracking-wider font-bold text-right">Actions</th>
@@ -1217,6 +1716,49 @@ export default function App() {
                                           animate={{ opacity: 1, y: 0 }}
                                           transition={{ duration: 0.3, delay: Math.min(index * 0.05, 0.5), ease: "easeOut" }}
                                           key={file.id} 
+                                          draggable
+                                          onDragStart={(e) => {
+                                            e.dataTransfer.setData('application/json', JSON.stringify({ fileId: file.id, parentId: file.parents?.[0] || currentFolderId }));
+                                            e.dataTransfer.effectAllowed = 'move';
+                                          }}
+                                          onDragOver={(e) => {
+                                            if (isFolder) {
+                                              e.preventDefault();
+                                              e.dataTransfer.dropEffect = 'move';
+                                              e.currentTarget.classList.add('bg-emerald-900/30');
+                                            }
+                                          }}
+                                          onDragLeave={(e) => {
+                                            if (isFolder) {
+                                              e.currentTarget.classList.remove('bg-emerald-900/30');
+                                            }
+                                          }}
+                                          onDrop={(e) => {
+                                            if (isFolder) {
+                                              e.preventDefault();
+                                              e.currentTarget.classList.remove('bg-emerald-900/30');
+                                              try {
+                                                const dataStr = e.dataTransfer.getData('application/json');
+                                                if (dataStr) {
+                                                  const data = JSON.parse(dataStr);
+                                                  if (data.fileId !== file.id) {
+                                                    handleDropMove(data.fileId, data.parentId, file.id);
+                                                  }
+                                                }
+                                              } catch (err) {
+                                                console.error('Drop error', err);
+                                              }
+                                            }
+                                          }}
+                                          onContextMenu={(e) => {
+                                            e.preventDefault();
+                                            setContextMenu({
+                                              visible: true,
+                                              x: e.clientX,
+                                              y: e.clientY,
+                                              file
+                                            });
+                                          }}
                                           className="border-b border-emerald-500/10 hover:bg-emerald-950/15 transition-colors text-emerald-100 align-middle"
                                         >
                                           <td className="p-3 text-center w-10">
@@ -1260,7 +1802,7 @@ export default function App() {
                                               </button>
                                             )}
                                           </td>
-                                          <td className="p-3 text-emerald-600 truncate max-w-xs">{file.mimeType.replace('application/', '').replace('vnd.google-apps.', 'workspace // ')}</td>
+                                          <td className="p-3 text-emerald-600 truncate max-w-xs">{file.mimeType.replace('application/', '').replace('vnd.google-apps.', 'workspace/')}</td>
                                           <td className="p-3 text-right text-emerald-500">
                                             {file.size ? formatBytes(Number(file.size)) : isFolder ? 'DIR' : 'N/A'}
                                           </td>
@@ -1288,10 +1830,17 @@ export default function App() {
                                                   <span>AI Analyze</span>
                                                 </button>
                                                 <button 
-                                                  onClick={() => handleFilePreviewClick(file.id)}
+                                                  onClick={() => handleFileInfoClick(file)}
                                                   className="px-2 py-0.5 border border-emerald-500/20 text-emerald-400 hover:border-emerald-400 hover:bg-emerald-500/10 text-[10px] rounded cursor-pointer"
                                                 >
-                                                  Quick Look
+                                                  Info
+                                                </button>
+                                                <button 
+                                                  onClick={() => handleRenameMoveClick(file)}
+                                                  className="px-2 py-0.5 border border-cyan-500/20 text-cyan-400 hover:border-cyan-400 hover:bg-cyan-500/10 text-[10px] rounded cursor-pointer flex items-center gap-1"
+                                                >
+                                                  <Pencil className="w-3 h-3" />
+                                                  <span>Move/Rename</span>
                                                 </button>
                                               </div>
                                             )}
@@ -1308,38 +1857,66 @@ export default function App() {
                       </div>
 
                       {/* Right Side: Telemetry Metrics Visualizer */}
-                      <div className="w-full lg:w-[320px] shrink-0 overflow-y-auto border-t lg:border-t-0 lg:border-l border-emerald-500/20 bg-zinc-950/40 p-6 flex flex-col items-center">
-                        <h3 className="text-[10px] font-mono text-emerald-400 uppercase tracking-widest border-b border-emerald-500/20 pb-2 mb-4 w-full text-center font-bold">DRIVE TELEMETRY GAUGE</h3>
-                        {driveStats ? (
-                          <StorageVisualizer 
-                            limit={driveStats.limit} 
-                            usage={driveStats.usage} 
-                            free={driveStats.free} 
-                            totalFiles={driveStats.totalFiles} 
-                          />
-                        ) : (
-                          <div className="h-48 flex items-center justify-center font-mono text-xs text-emerald-600/40 italic">
-                            [ TELEMETRY STREAM OFFLINE ]
-                          </div>
-                        )}
-
-                        {/* Scraped Intel Box */}
-                        {scrapedInfo && (
-                          <div className="w-full border border-emerald-500/30 bg-emerald-950/15 p-4 rounded font-mono text-[10px] text-emerald-300 space-y-2 mt-4">
-                            <div className="text-emerald-400 font-bold uppercase tracking-wider border-b border-emerald-500/20 pb-1 flex items-center gap-1">
-                              <Sparkles className="w-3 h-3 text-emerald-400 animate-pulse" /> TARGET PAGE ANALYZED
+                      {showTelemetry ? (
+                        <div className="w-full lg:w-[320px] shrink-0 overflow-hidden border-t lg:border-t-0 lg:border-l border-emerald-500/20 bg-zinc-950/40 p-6 flex flex-col items-center relative group">
+                          <button 
+                            onClick={() => setShowTelemetry(false)}
+                            className="absolute -left-3 top-1/2 -translate-y-1/2 z-20 bg-zinc-900 border border-emerald-500/50 text-emerald-500 rounded-full p-0.5 opacity-0 group-hover:opacity-100 hover:bg-emerald-950 transition-all cursor-pointer shadow-[0_0_10px_rgba(0,255,128,0.3)] hidden lg:block"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                          <h3 className="text-[10px] font-mono text-emerald-400 uppercase tracking-widest border-b border-emerald-500/20 pb-2 mb-4 w-full text-center font-bold shrink-0">DRIVE TELEMETRY GAUGE</h3>
+                          {driveStats ? (
+                            <div className="flex-1 w-full min-h-0 flex items-center justify-center">
+                              <StorageVisualizer 
+                                limit={driveStats.limit} 
+                                usage={driveStats.usage} 
+                                free={driveStats.free} 
+                                totalFiles={driveStats.totalFiles} 
+                              />
                             </div>
-                            <div><strong className="text-emerald-500">TITLE:</strong> {scrapedInfo.title}</div>
-                            <div><strong className="text-emerald-500">CATEGORY:</strong> {scrapedInfo.category}</div>
-                            <div className="italic text-emerald-500/80 mt-1 leading-normal"><strong className="text-emerald-500">SUMMARY:</strong> {scrapedInfo.summary}</div>
-                            {scrapedInfo.ragHotInjected && (
-                              <div className="text-[8px] bg-cyan-400/10 border border-cyan-400/30 text-cyan-400 px-1.5 py-1 rounded text-center font-bold uppercase tracking-wider mt-1 animate-pulse">
-                                INJECTED DIRECTLY TO RAG SESSION
+                          ) : (
+                            <div className="h-48 flex items-center justify-center font-mono text-xs text-emerald-600/40 italic shrink-0">
+                              Telemetry Stream Offline
+                            </div>
+                          )}
+
+                          {/* Scraped Intel Box */}
+                          {scrapedInfo && (
+                            <div className="w-full border border-emerald-500/30 bg-emerald-950/15 rounded font-mono text-[10px] text-emerald-300 mt-4 shrink-0 overflow-y-auto">
+                              <div className="text-emerald-400 font-bold uppercase tracking-wider border-b border-emerald-500/20 px-4 py-2 flex items-center justify-between cursor-pointer hover:bg-emerald-500/10 select-none" onClick={() => setShowIntel(!showIntel)}>
+                                <span className="flex items-center gap-1">
+                                  <Sparkles className="w-3 h-3 text-emerald-400 animate-pulse" /> TARGET PAGE ANALYZED
+                                </span>
+                                <button className="text-emerald-500 hover:text-emerald-300">
+                                  {showIntel ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                </button>
                               </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                              {showIntel && (
+                                <div className="p-4 space-y-2 border-t border-emerald-500/10">
+                                  <div><strong className="text-emerald-500">TITLE:</strong> {scrapedInfo.title}</div>
+                                  <div><strong className="text-emerald-500">CATEGORY:</strong> {scrapedInfo.category}</div>
+                                  <div className="italic text-emerald-500/80 mt-1 leading-normal"><strong className="text-emerald-500">SUMMARY:</strong> {scrapedInfo.summary}</div>
+                                  {scrapedInfo.ragHotInjected && (
+                                    <div className="text-[8px] bg-cyan-400/10 border border-cyan-400/30 text-cyan-400 px-1.5 py-1 rounded text-center font-bold uppercase tracking-wider mt-1 animate-pulse">
+                                      INJECTED DIRECTLY TO RAG SESSION
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex flex-col justify-center shrink-0 w-6 relative border-l border-emerald-500/20 bg-zinc-950/40 hidden lg:flex">
+                          <button 
+                            onClick={() => setShowTelemetry(true)}
+                            className="absolute -left-3 top-1/2 -translate-y-1/2 z-20 bg-zinc-900 border border-emerald-500/50 text-emerald-500 rounded-full p-0.5 hover:bg-emerald-950 transition-all cursor-pointer shadow-[0_0_10px_rgba(0,255,128,0.3)]"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1362,8 +1939,8 @@ export default function App() {
                   <div className="flex items-center space-x-2">
                     <Terminal className="w-5 h-5 text-emerald-400 shadow-glow" />
                     <div>
-                      <h3 className="font-bold text-xs uppercase tracking-widest text-emerald-300">Tactical AI Mainframe</h3>
-                      <p className="text-[8px] font-mono text-emerald-500/70 tracking-widest uppercase mt-0.5">FOLDER RAG MODULE // ON</p>
+                      <h3 className="font-bold text-xs uppercase tracking-widest text-emerald-300">AI Chat Assistant</h3>
+                      <p className="text-[8px] font-mono text-emerald-500/70 tracking-widest uppercase mt-0.5">Folder RAG Module: ON</p>
                     </div>
                   </div>
                   <button 
@@ -1378,8 +1955,8 @@ export default function App() {
                 {ragIngestionResult && (
                   <div className="p-4 bg-zinc-900/50 border-b border-emerald-500/10 font-mono text-[9px] text-emerald-600 shrink-0 leading-relaxed space-y-1">
                     <div>&gt; ACTIVE REPOSITORY: "{ragActiveFolderName}"</div>
-                    <div>&gt; CHUNKS COMPILED: {ragIngestionResult.filesIngestedCount} datasets ingested // {ragIngestionResult.totalFilesFound} mapped</div>
-                    <div>&gt; PIPELINE ENGINE: GEMINI-3.5-FLASH // LARGE CONTEXT ENGINE</div>
+                    <div>&gt; Chunks Compiled: {ragIngestionResult.filesIngestedCount} datasets ingested | {ragIngestionResult.totalFilesFound} mapped</div>
+                    <div>&gt; Pipeline Engine: Gemini 3.5 Flash | Large Context Engine</div>
                   </div>
                 )}
 
@@ -1402,7 +1979,7 @@ export default function App() {
                         }`}
                       >
                         <div className="text-[8px] text-emerald-600 uppercase tracking-widest mb-1.5 select-none">
-                          {msg.sender === 'user' ? 'USER QUERY // LEAD DEV' : 'AI RESPONSE // MAINFRAME'}
+                          {msg.sender === 'user' ? 'User' : 'AI'}
                         </div>
                         <div 
                           className="markdown-body space-y-2 [&_p]:leading-relaxed [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h1]:text-sm [&_h1]:font-bold [&_h1]:text-emerald-300 [&_h2]:text-xs [&_h2]:font-bold [&_h2]:text-emerald-300 [&_h3]:text-xs [&_h3]:font-bold [&_h3]:text-emerald-300 [&_code]:bg-emerald-950/40 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-emerald-400 [&_pre]:bg-zinc-950/80 [&_pre]:p-2 [&_pre]:rounded [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_a]:text-cyan-400 [&_a]:underline"
@@ -1427,7 +2004,7 @@ export default function App() {
                       value={ragInput}
                       onChange={(e) => setRagInput(e.target.value)}
                       disabled={!ragSessionId || ragLoading}
-                      placeholder={ragSessionId ? "Ask a question about this folder..." : "Matrix inactive. Select a folder to ingest..."}
+                      placeholder={ragSessionId ? "Ask a question about this folder..." : "RAG inactive. Select a folder to ingest..."}
                       className="flex-1 px-3 py-2 bg-zinc-950 border border-emerald-500/30 rounded text-emerald-300 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400 placeholder-emerald-900/50 disabled:opacity-50"
                     />
                     <button
@@ -1460,7 +2037,7 @@ export default function App() {
       {/* Footer Bar */}
       <footer className="py-3 bg-zinc-950 border-t border-emerald-500/20 px-8 flex flex-col sm:flex-row items-center justify-between text-[9px] text-emerald-600/50 shrink-0 uppercase tracking-[0.2em] font-mono relative z-10 gap-3">
         <div className="text-center sm:text-left leading-relaxed">
-          <span className="text-emerald-400 font-bold">Blacklisted Binary Labs</span> // App Development<br/>
+          <span className="text-emerald-400 font-bold">Blacklisted Binary Labs</span> | App Development<br/>
           <span className="text-emerald-600/60">Lead Dev: Rob Branting (blacklistedrob@gmail.com)</span>
         </div>
         <div className="flex space-x-8 items-center">
@@ -1506,7 +2083,7 @@ export default function App() {
                   <div className="relative">
                     <input 
                       type="text"
-                      placeholder="e.g. source_payload_archive"
+                      placeholder="e.g. documents_archive"
                       value={zipFileNameInput}
                       onChange={(e) => setZipFileNameInput(e.target.value)}
                       required
@@ -1549,7 +2126,91 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Quick-Look File Preview Modal */}
+      {/* Move/Rename Modal */}
+      <AnimatePresence>
+        {renameFile && (
+          <div className="fixed inset-0 bg-zinc-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <motion.div 
+              initial={{ scale: 0.95, y: 15, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.95, y: 15, opacity: 0 }}
+              className="w-full max-w-lg bg-zinc-900 border border-cyan-500/30 rounded shadow-[0_0_50px_rgba(6,182,212,0.15)] overflow-hidden font-mono text-cyan-100"
+            >
+              <div className="p-4 border-b border-cyan-500/30 bg-zinc-950 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Pencil className="w-5 h-5 text-cyan-400" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">MOVE / RENAME FILE</span>
+                </div>
+                <button 
+                  onClick={() => setRenameFile(null)}
+                  className="p-1 border border-cyan-500/20 text-cyan-500 hover:text-red-400 hover:border-red-500/40 rounded transition-all cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={submitRenameMove} className="p-6 space-y-6">
+                <div className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-cyan-500">File Name</label>
+                    <input 
+                      type="text"
+                      value={renameInput}
+                      onChange={(e) => setRenameInput(e.target.value)}
+                      required
+                      className="w-full bg-zinc-950 border border-cyan-500/30 rounded px-3 py-2 text-xs text-cyan-300 focus:outline-none focus:border-cyan-400/50 focus:shadow-[0_0_10px_rgba(6,182,212,0.1)] transition-all"
+                    />
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-cyan-500">Location (Folder)</label>
+                    <select
+                      value={moveFolderId}
+                      onChange={(e) => setMoveFolderId(e.target.value)}
+                      className="w-full bg-zinc-950 border border-cyan-500/30 rounded px-3 py-2 text-xs text-cyan-300 focus:outline-none focus:border-cyan-400/50 transition-all appearance-none cursor-pointer"
+                    >
+                      {allFolders.map(folder => (
+                        <option key={folder.id} value={folder.id}>
+                          {folder.id === 'root' ? '/ My Drive' : `/ ${folder.name}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-4 border-t border-cyan-500/20">
+                  <button
+                    type="button"
+                    onClick={() => setRenameFile(null)}
+                    className="flex-1 py-2 border border-cyan-500/30 hover:border-cyan-400 text-cyan-500 hover:text-cyan-400 rounded text-xs tracking-wider uppercase transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={renameMoveLoading || !renameInput.trim()}
+                    className="flex-1 py-2 bg-cyan-500/10 border border-cyan-500/50 hover:bg-cyan-500/30 hover:border-cyan-400 text-cyan-400 font-bold rounded text-xs tracking-wider uppercase transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                  >
+                    {renameMoveLoading ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>APPLYING...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>APPLY CHANGES</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* File Preview Modal */}
       <AnimatePresence>
         {previewFileId && (
           <div 
@@ -1560,14 +2221,14 @@ export default function App() {
               initial={{ scale: 0.95, y: 15, opacity: 0 }}
               animate={{ scale: 1, y: 0, opacity: 1 }}
               exit={{ scale: 0.95, y: 15, opacity: 0 }}
-              className="w-full max-w-3xl bg-zinc-900 border border-emerald-500/30 rounded shadow-[0_0_50px_rgba(0,255,128,0.15)] overflow-hidden flex flex-col max-h-[85vh] font-mono text-emerald-100"
+              className="w-full max-w-4xl bg-zinc-900 border border-emerald-500/30 rounded shadow-[0_0_50px_rgba(0,255,128,0.15)] overflow-hidden flex flex-col max-h-[90vh] font-mono text-emerald-100"
               id="quick-look-modal-content"
             >
               {/* Modal Header */}
-              <div className="p-4 border-b border-emerald-500/30 bg-zinc-950 flex items-center justify-between">
+              <div className="p-4 border-b border-emerald-500/30 bg-zinc-950 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2">
                   <FileText className="w-5 h-5 text-emerald-400" />
-                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">FILE PREVIEW DECRYPTER</span>
+                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">File Preview</span>
                 </div>
                 <button 
                   onClick={() => setPreviewFileId(null)}
@@ -1583,7 +2244,7 @@ export default function App() {
                 {previewLoading ? (
                   <div className="py-24 flex flex-col items-center justify-center gap-4">
                     <Loader2 className="w-10 h-10 animate-spin text-emerald-400 shadow-glow" />
-                    <div className="text-xs text-emerald-500 uppercase tracking-widest animate-pulse">CONNECTING SECURE NODES & DECRYPTING PAYLOAD...</div>
+                    <div className="text-xs text-emerald-500 uppercase tracking-widest animate-pulse">Loading File Preview...</div>
                   </div>
                 ) : previewError ? (
                   <div className="p-4 border border-red-500/30 bg-red-950/15 rounded space-y-2">
@@ -1593,9 +2254,9 @@ export default function App() {
                     <p className="text-xs text-red-500/80 leading-relaxed">{previewError}</p>
                   </div>
                 ) : previewData ? (
-                  <div className="space-y-6">
+                  <div className="space-y-6 flex flex-col h-full">
                     {/* Metadata Grid */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border border-emerald-500/20 bg-zinc-950/40 p-4 rounded text-xs leading-normal">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border border-emerald-500/20 bg-zinc-950/40 p-4 rounded text-xs leading-normal shrink-0">
                       <div className="space-y-1.5">
                         <div><strong className="text-emerald-500 uppercase">FILE ID:</strong> <span className="text-emerald-300 font-mono text-[10px] bg-emerald-950/20 px-1 py-0.5 rounded break-all">{previewData.metadata.id}</span></div>
                         <div><strong className="text-emerald-500 uppercase">FILE NAME:</strong> <span className="text-emerald-300 font-bold">{previewData.metadata.name}</span></div>
@@ -1610,10 +2271,10 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Text Content Preview box */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-emerald-500 font-bold">
-                        <span>RAW DECRYPTED PAYLOAD MATRIX (UP TO 8KB)</span>
+                    {/* Content Preview */}
+                    <div className="space-y-2 flex-1 flex flex-col min-h-0">
+                      <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-emerald-500 font-bold shrink-0">
+                        <span>File Content Preview</span>
                         {previewData.metadata.webViewLink && (
                           <a 
                             href={previewData.metadata.webViewLink} 
@@ -1625,35 +2286,29 @@ export default function App() {
                           </a>
                         )}
                       </div>
-                      <div className="w-full bg-zinc-950 border border-emerald-500/20 p-4 rounded h-60 overflow-y-auto text-xs text-emerald-300 whitespace-pre-wrap font-mono leading-relaxed select-text selection:bg-emerald-500/30">
-                        {previewData.previewContent}
+                      <div className="w-full bg-zinc-950 border border-emerald-500/20 p-4 rounded flex-1 overflow-y-auto relative min-h-[300px]">
+                        {previewData.previewType === 'image' ? (
+                          <div className="flex items-center justify-center w-full h-full">
+                            <img src={previewData.previewContent} alt={previewData.metadata.name} className="max-w-full max-h-full object-contain rounded border border-emerald-500/10" />
+                          </div>
+                        ) : previewData.previewType === 'pdf' ? (
+                          <iframe src={previewData.previewContent} title={previewData.metadata.name} className="w-full h-full border-none rounded" />
+                        ) : previewData.previewType === 'text' ? (
+                          <div className="text-xs text-emerald-300 whitespace-pre-wrap font-mono leading-relaxed select-text selection:bg-emerald-500/30">
+                            {previewData.previewContent}
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center justify-center w-full h-full text-center space-y-4">
+                            <FileIcon className="w-16 h-16 text-emerald-500/50" />
+                            <p className="text-emerald-500 text-sm font-bold uppercase tracking-widest">{previewData.previewContent}</p>
+                            {previewData.metadata.webViewLink && (
+                              <a href={previewData.metadata.webViewLink} target="_blank" rel="noreferrer" className="mt-4 px-6 py-2 bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 hover:bg-emerald-500/30 hover:text-emerald-200 transition-colors rounded">
+                                OPEN IN GOOGLE DRIVE
+                              </a>
+                            )}
+                          </div>
+                        )}
                       </div>
-                    </div>
-
-                    {/* Actions buttons */}
-                    <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-emerald-500/20">
-                      {previewData.isPreviewable ? (
-                        <button
-                          onClick={handleQueryFile}
-                          className="flex-1 py-3 bg-emerald-500/10 border border-emerald-500/50 hover:bg-emerald-500/30 hover:border-emerald-400 text-emerald-400 rounded font-mono text-xs tracking-widest uppercase transition-all flex justify-center items-center gap-2 group relative overflow-hidden cursor-pointer"
-                          id="query-this-file-btn"
-                        >
-                          <div className="absolute inset-0 w-full h-full bg-gradient-to-r from-transparent via-emerald-400/10 to-transparent -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]" />
-                          <Sparkles className="w-4 h-4 animate-pulse text-emerald-400" />
-                          <span className="group-hover:text-glow font-bold">QUERY THIS FILE WITH AI</span>
-                        </button>
-                      ) : (
-                        <div className="flex-1 py-3 bg-zinc-950 border border-emerald-500/10 text-emerald-700 rounded text-center text-xs tracking-widest uppercase select-none italic">
-                          BINARY DATATYPE - RAG MATRIX DIRECTLY REPRESENTS METADATA ONLY
-                        </div>
-                      )}
-                      <button
-                        onClick={() => setPreviewFileId(null)}
-                        className="px-6 py-3 border border-emerald-500/30 hover:border-emerald-400 text-emerald-500 hover:text-emerald-400 rounded font-mono text-xs tracking-widest uppercase transition-all cursor-pointer"
-                        id="dismiss-quick-look-btn"
-                      >
-                        DISMISS
-                      </button>
                     </div>
                   </div>
                 ) : null}
@@ -1662,6 +2317,324 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Context Menu */}
+      <AnimatePresence>
+        {contextMenu?.visible && contextMenu.file && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ duration: 0.1 }}
+            className="fixed z-50 min-w-[160px] bg-zinc-950 border border-emerald-500/30 rounded shadow-[0_4px_20px_rgba(0,0,0,0.5)] overflow-hidden font-mono text-xs text-emerald-300 py-1"
+            style={{ 
+              top: contextMenu.y, 
+              left: contextMenu.x,
+              // basic boundary check if needed, but keeping it simple
+            }}
+          >
+            <div className="px-3 py-2 border-b border-emerald-500/10 text-[10px] uppercase font-bold text-emerald-600 truncate max-w-[200px]">
+              {contextMenu.file.name}
+            </div>
+            
+            <button
+              onClick={(e) => { e.stopPropagation(); setContextMenu(null); handleRenameMoveClick(contextMenu.file); }}
+              className="w-full text-left px-4 py-2 hover:bg-emerald-900/40 hover:text-emerald-100 flex items-center space-x-2 transition-colors cursor-pointer"
+            >
+              <Pencil className="w-3.5 h-3.5 text-cyan-500" />
+              <span>Move / Rename</span>
+            </button>
+            
+            <button
+              onClick={(e) => { e.stopPropagation(); setContextMenu(null); handleFileInfoClick(contextMenu.file); }}
+              className="w-full text-left px-4 py-2 hover:bg-emerald-900/40 hover:text-emerald-100 flex items-center space-x-2 transition-colors cursor-pointer"
+            >
+              <Info className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Info</span>
+            </button>
+
+            {contextMenu.file.mimeType !== 'application/vnd.google-apps.folder' ? (
+              <button
+                onClick={(e) => { e.stopPropagation(); setContextMenu(null); handleDownloadFile(contextMenu.file); }}
+                className="w-full text-left px-4 py-2 hover:bg-emerald-900/40 hover:text-emerald-100 flex items-center space-x-2 transition-colors cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Download</span>
+              </button>
+            ) : (
+              <button
+                onClick={(e) => { e.stopPropagation(); setContextMenu(null); handleCompressFolder(contextMenu.file); }}
+                className="w-full text-left px-4 py-2 hover:bg-emerald-900/40 hover:text-emerald-100 flex items-center space-x-2 transition-colors cursor-pointer"
+              >
+                <FileArchive className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Compress Folder</span>
+              </button>
+            )}
+
+            <button
+              onClick={(e) => { e.stopPropagation(); setContextMenu(null); handleDeleteFile(contextMenu.file); }}
+              className="w-full text-left px-4 py-2 hover:bg-red-900/40 hover:text-red-100 flex items-center space-x-2 transition-colors text-red-400 border-t border-emerald-500/10 cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-500" />
+              <span>Delete</span>
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Info Drawer Panel */}
+      <AnimatePresence>
+        {infoFile && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-zinc-950/60 backdrop-blur-sm z-40"
+              onClick={() => setInfoFile(null)}
+            />
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="fixed top-0 right-0 h-full w-[400px] max-w-full bg-zinc-900 border-l border-emerald-500/30 shadow-[-10px_0_50px_rgba(0,255,128,0.1)] z-50 flex flex-col font-mono text-emerald-100 overflow-hidden"
+            >
+              {/* Drawer Header */}
+              <div className="p-5 border-b border-emerald-500/30 bg-zinc-950 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-emerald-400" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">FILE METADATA & INFO</span>
+                </div>
+                <button 
+                  onClick={() => setInfoFile(null)}
+                  className="p-1 border border-emerald-500/20 text-emerald-500 hover:text-red-400 hover:border-red-500/40 rounded transition-all cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Drawer Body */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                {/* File Identity */}
+                <div className="space-y-4">
+                  <div className="p-4 bg-emerald-950/20 border border-emerald-500/20 rounded flex items-start gap-4">
+                    <div className="p-2 bg-emerald-500/10 rounded shrink-0">
+                      <FileText className="w-8 h-8 text-emerald-400" />
+                    </div>
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <h3 className="font-bold text-emerald-300 break-words leading-tight">{infoFile.name}</h3>
+                      <p className="text-[10px] text-emerald-500 truncate">{infoFile.mimeType}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Metadata Details */}
+                <div className="space-y-4">
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 border-b border-emerald-500/10 pb-1">System Attributes</h4>
+                  <div className="grid grid-cols-2 gap-y-4 text-xs">
+                    <div>
+                      <div className="text-emerald-700 text-[9px] uppercase tracking-wider mb-1">Creation Date</div>
+                      <div className="text-emerald-300">{infoFile.createdTime ? new Date(infoFile.createdTime).toLocaleDateString() : 'Unknown'}</div>
+                    </div>
+                    <div>
+                      <div className="text-emerald-700 text-[9px] uppercase tracking-wider mb-1">Last Modified</div>
+                      <div className="text-emerald-300">{infoFile.modifiedTime ? new Date(infoFile.modifiedTime).toLocaleDateString() : 'Unknown'}</div>
+                    </div>
+                    <div>
+                      <div className="text-emerald-700 text-[9px] uppercase tracking-wider mb-1">File Size</div>
+                      <div className="text-emerald-300">{infoFile.size ? formatBytes(Number(infoFile.size)) : 'N/A'}</div>
+                    </div>
+                    <div>
+                      <div className="text-emerald-700 text-[9px] uppercase tracking-wider mb-1">Sharing State</div>
+                      <div className="text-emerald-300">{infoFile.shared ? 'Shared' : 'Private'}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Editable Notes Section */}
+                <div className="space-y-4">
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 border-b border-emerald-500/10 pb-1">Custom Notes / Tags</h4>
+                  <textarea
+                    value={infoNotes}
+                    onChange={(e) => setInfoNotes(e.target.value)}
+                    placeholder="Add tags (e.g. #important) or description here..."
+                    className="w-full h-32 bg-zinc-950 border border-emerald-500/30 rounded p-3 text-xs text-emerald-300 focus:outline-none focus:border-emerald-400/50 focus:shadow-[0_0_10px_rgba(0,255,128,0.1)] transition-all resize-none leading-relaxed"
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      onClick={handleSaveNotes}
+                      disabled={savingNotes}
+                      className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/20 rounded text-[10px] font-bold tracking-widest uppercase transition-all disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+                    >
+                      {savingNotes ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                      Save Notes
+                    </button>
+                  </div>
+                </div>
+
+                {/* External Actions */}
+                <div className="space-y-4 pt-4 border-t border-emerald-500/10">
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 mb-2">External Links</h4>
+                  {infoFile.webViewLink && (
+                    <a
+                      href={infoFile.webViewLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block w-full text-center py-2 bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 hover:border-cyan-400/50 rounded text-xs font-bold tracking-wider uppercase transition-all"
+                    >
+                      Open in Google Drive
+                    </a>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* AI Settings Modal */}
+      <AnimatePresence>
+        {showAiSettings && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-zinc-950 border border-emerald-500/30 rounded-lg p-6 w-[400px] shadow-2xl relative"
+            >
+              <button 
+                onClick={() => setShowAiSettings(false)}
+                className="absolute top-4 right-4 text-emerald-500 hover:text-emerald-300 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              
+              <h2 className="text-emerald-400 font-bold uppercase tracking-widest text-lg flex items-center gap-2 mb-6">
+                <Cpu className="w-5 h-5" />
+                AI Connection Logic
+              </h2>
+              
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono text-emerald-500 uppercase tracking-widest">Custom Gemini API Key</label>
+                  <input
+                    type="password"
+                    value={customGeminiKey}
+                    onChange={(e) => setCustomGeminiKey(e.target.value)}
+                    placeholder="Leave empty for default"
+                    className="w-full px-3 py-2 bg-zinc-950/80 border border-emerald-500/30 rounded text-emerald-300 font-mono text-xs focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+                
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono text-emerald-500 uppercase tracking-widest">Custom OpenAI API Key (Fallback)</label>
+                  <input
+                    type="password"
+                    value={customOpenAiKey}
+                    onChange={(e) => setCustomOpenAiKey(e.target.value)}
+                    placeholder="sk-..."
+                    className="w-full px-3 py-2 bg-zinc-950/80 border border-emerald-500/30 rounded text-emerald-300 font-mono text-xs focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-emerald-500/20">
+                  <span className="text-[10px] font-mono text-emerald-500 uppercase tracking-widest">Pollinations.ai Failsafe</span>
+                  <button 
+                    onClick={() => setPollinationEnabled(!pollinationEnabled)}
+                    className={`w-10 h-5 rounded-full relative transition-colors cursor-pointer ${pollinationEnabled ? 'bg-emerald-500' : 'bg-zinc-800'}`}
+                  >
+                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-zinc-950 rounded-full transition-transform ${pollinationEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* r00tBypass Floating Chat */}
+      <div className="fixed bottom-6 right-6 z-[100] flex flex-col items-end">
+        <AnimatePresence>
+          {showRootChat && (
+            <motion.div 
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.95 }}
+              className="mb-4 w-80 sm:w-96 bg-zinc-950/95 border border-emerald-500/50 rounded shadow-[0_0_30px_rgba(0,255,128,0.15)] flex flex-col overflow-hidden backdrop-blur-md"
+            >
+              <div className="bg-emerald-950/40 border-b border-emerald-500/30 p-3 flex justify-between items-center cursor-pointer select-none" onClick={() => setShowRootChat(false)}>
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded bg-zinc-950 border border-emerald-500/50 flex items-center justify-center hacker-glow">
+                    <Skull className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="font-mono text-xs font-bold text-emerald-400 uppercase tracking-widest text-glow">r00tBypass</span>
+                    <span className="font-mono text-[9px] text-emerald-500/70 uppercase">Master Admin AI</span>
+                  </div>
+                </div>
+                <button className="text-emerald-500 hover:text-emerald-300 transition-colors cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="h-80 p-4 overflow-y-auto font-mono text-xs space-y-4 bg-zinc-950/50">
+                {rootChatMessages.map((msg, i) => (
+                  <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                    <span className="text-[9px] text-emerald-500/50 mb-1">{msg.role === 'user' ? 'You' : 'r00t'}</span>
+                    <div className={`p-2.5 rounded border max-w-[85%] ${
+                      msg.role === 'user' 
+                        ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-100' 
+                        : 'bg-zinc-900/80 border-emerald-500/50 text-emerald-300 shadow-[inset_0_0_10px_rgba(0,255,128,0.05)]'
+                    }`}>
+                      {msg.text}
+                    </div>
+                  </div>
+                ))}
+                {isRootThinking && (
+                  <div className="flex items-start flex-col">
+                    <span className="text-[9px] text-emerald-500/50 mb-1">r00t</span>
+                    <div className="p-2.5 rounded border max-w-[85%] bg-zinc-900/80 border-emerald-500/50 text-emerald-400 flex items-center gap-2">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span className="text-[10px] uppercase tracking-wider">Hacking reality...</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <form onSubmit={handleRootChatSubmit} className="p-3 border-t border-emerald-500/30 bg-emerald-950/20 flex gap-2">
+                <input 
+                  type="text" 
+                  value={rootChatInput}
+                  onChange={(e) => setRootChatInput(e.target.value)}
+                  placeholder="Command me, weakling..."
+                  className="flex-1 bg-zinc-950 border border-emerald-500/30 rounded px-3 py-2 text-xs text-emerald-300 focus:outline-none focus:border-emerald-400 placeholder-emerald-700/50 font-mono"
+                  disabled={isRootThinking}
+                />
+                <button 
+                  type="submit"
+                  disabled={isRootThinking || !rootChatInput.trim()}
+                  className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/50 rounded px-3 py-2 flex items-center justify-center cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </form>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <button 
+          onClick={() => setShowRootChat(!showRootChat)}
+          className={`w-12 h-12 rounded-full border flex items-center justify-center transition-all shadow-[0_0_20px_rgba(0,255,128,0.2)] cursor-pointer group hover:scale-105 ${
+            showRootChat 
+              ? 'bg-zinc-900 border-emerald-400 text-emerald-400' 
+              : 'bg-emerald-950/80 border-emerald-500/50 text-emerald-500 hover:text-emerald-300'
+          }`}
+        >
+          {showRootChat ? <X className="w-6 h-6 group-hover:rotate-90 transition-transform" /> : <HelpCircle className="w-6 h-6 group-hover:scale-110 transition-transform" />}
+        </button>
+      </div>
+
     </div>
   );
 }

@@ -40,6 +40,87 @@ const ai = new GoogleGenAI({
   }
 });
 
+// AI Connection settings type
+interface AISettings {
+  customGeminiKey?: string;
+  customOpenAiKey?: string;
+  pollinationEnabled?: boolean;
+}
+
+async function generateAIContent(
+  prompt: string,
+  modelParams: any,
+  aiSettings: AISettings = {}
+): Promise<{ text: string; usedBackup: boolean }> {
+  const { customGeminiKey, customOpenAiKey, pollinationEnabled = true } = aiSettings;
+  let usedBackup = false;
+  const isJson = modelParams.config?.responseMimeType === 'application/json';
+
+  const geminiKey = customGeminiKey || process.env.GEMINI_API_KEY;
+  if (geminiKey) {
+    try {
+      const genAi = new GoogleGenAI({ 
+        apiKey: geminiKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
+      const aiResponse = await genAi.models.generateContent(modelParams);
+      return { text: aiResponse.text || '', usedBackup: false };
+    } catch (e: any) {
+      console.error("Gemini AI failed:", e.message);
+      if (!pollinationEnabled && !customOpenAiKey) throw e;
+    }
+  }
+
+  usedBackup = true;
+  console.log("Using Backup AI Connection...");
+
+  let fullPrompt = prompt;
+  if (modelParams.config?.systemInstruction) {
+    fullPrompt = `${modelParams.config.systemInstruction}\n\n${prompt}`;
+  }
+  if (isJson) {
+    fullPrompt += "\n\nProvide the response as raw JSON only.";
+  }
+
+  if (customOpenAiKey) {
+    try {
+      const res = await axios.post('https://api.openai.com/v1/chat/completions', {
+        model: 'gpt-3.5-turbo',
+        messages: [{ role: 'user', content: fullPrompt }],
+        response_format: isJson ? { type: 'json_object' } : undefined
+      }, {
+        headers: {
+          'Authorization': `Bearer ${customOpenAiKey}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      return { text: res.data.choices[0].message.content || '', usedBackup: true };
+    } catch (e: any) {
+      console.error("Custom OpenAI failed:", e.message);
+      if (!pollinationEnabled) throw e;
+    }
+  }
+
+  if (pollinationEnabled) {
+    try {
+      const res = await axios.post('https://text.pollinations.ai/', {
+        messages: [{ role: 'user', content: fullPrompt }],
+        jsonMode: isJson,
+        model: 'openai'
+      }, {
+        headers: { 'Content-Type': 'application/json' }
+      });
+      let responseText = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+      return { text: responseText, usedBackup: true };
+    } catch (e: any) {
+      console.error("Pollinations.ai failed:", e.message);
+      throw new Error("All AI connections failed.");
+    }
+  }
+
+  throw new Error("No AI providers available or all failed.");
+}
+
 // In-memory store for task progress
 const tasks: Record<string, {
   status: 'pending' | 'downloading' | 'uploading' | 'done' | 'error' | 'analyzing';
@@ -84,9 +165,22 @@ app.post('/api/download', async (req, res) => {
     tasks[taskId].status = 'downloading';
     broadcastProgress(taskId);
 
+    // Replace .onion URLs with Tor2Web proxy
+    let fetchUrl = url;
+    try {
+      const urlObj = new URL(url);
+      if (urlObj.hostname.endsWith('.onion')) {
+        urlObj.hostname = urlObj.hostname + '.pet';
+        fetchUrl = urlObj.toString();
+        console.log(`Rewriting Tor URL to: ${fetchUrl}`);
+      }
+    } catch (e) {
+      // Ignore
+    }
+
     const response = await axios({
       method: 'get',
-      url,
+      url: fetchUrl,
       responseType: 'stream',
       httpsAgent: new https.Agent({ rejectUnauthorized: false })
     });
@@ -170,8 +264,8 @@ ${truncatedContent}`;
             }
           };
 
-          const aiResponse = await ai.models.generateContent(modelParams);
-          const text = aiResponse.text || '';
+          const aiResponse = await generateAIContent(prompt, modelParams, req.body.aiSettings);
+          const text = aiResponse.text;
           let analysisResult;
           try {
             analysisResult = JSON.parse(text);
@@ -220,8 +314,21 @@ app.post('/api/download/scrape', async (req, res) => {
     oauth2Client.setCredentials({ access_token: accessToken });
     const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
+    // Replace .onion URLs with Tor2Web proxy
+    let fetchUrl = url;
+    try {
+      const urlObj = new URL(url);
+      if (urlObj.hostname.endsWith('.onion')) {
+        urlObj.hostname = urlObj.hostname + '.pet';
+        fetchUrl = urlObj.toString();
+        console.log(`Rewriting Tor URL to: ${fetchUrl}`);
+      }
+    } catch (e) {
+      // Ignore
+    }
+
     // 1. Fetch raw page content
-    const pageResponse = await axios.get(url, {
+    const pageResponse = await axios.get(fetchUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
@@ -288,12 +395,12 @@ app.post('/api/download/scrape', async (req, res) => {
 
       Return ONLY the raw JSON block, with no markdown formatting tags.`;
 
-      const aiResponse = await ai.models.generateContent({
+      const aiResponse = await generateAIContent(metadataPrompt, {
         model: 'gemini-3.5-flash',
         contents: metadataPrompt,
-      });
+      }, req.body.aiSettings);
 
-      const responseText = aiResponse.text || '';
+      const responseText = aiResponse.text;
       // Clean JSON if the model wrapped it in markdown codeblocks
       const cleanJsonStr = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
       const metadataObj = JSON.parse(cleanJsonStr);
@@ -534,7 +641,7 @@ async function getFileContent(drive: any, file: { id: string; name: string; mime
       const modelName = isVideo ? 'gemini-3.1-pro-preview' : 'gemini-3.5-flash';
       
       console.log(`Starting AI analysis for ${file.name} using ${modelName}...`);
-      const response = await ai.models.generateContent({
+      const response = await generateAIContent(prompt, {
         model: modelName,
         contents: [
           {
@@ -545,7 +652,7 @@ async function getFileContent(drive: any, file: { id: string; name: string; mime
             ]
           }
         ]
-      });
+      }, req.body?.aiSettings);
       console.log(`AI analysis completed for ${file.name}`);
       
       return response.text || '[Analysis completed but no text returned]';
@@ -594,6 +701,35 @@ app.get('/api/drive/about', async (req, res) => {
 });
 
 // 2. GET /api/drive/files
+app.get('/api/drive/folders', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const accessToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+
+  if (!accessToken) {
+    return res.status(401).json({ error: 'Unauthorized: missing access token' });
+  }
+
+  try {
+    const oauth2Client = new google.auth.OAuth2();
+    oauth2Client.setCredentials({ access_token: accessToken });
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+
+    const listRes = await drive.files.list({
+      q: `mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      fields: 'files(id, name)',
+      orderBy: 'name',
+      pageSize: 1000
+    });
+
+    res.json({
+      folders: listRes.data.files || []
+    });
+  } catch (err: any) {
+    console.error('Error listing folders:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/drive/files', async (req, res) => {
   const authHeader = req.headers.authorization;
   const accessToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
@@ -621,7 +757,7 @@ app.get('/api/drive/files', async (req, res) => {
     // List children
     const listRes = await drive.files.list({
       q: `'${folderId}' in parents and trashed = false`,
-      fields: 'files(id, name, mimeType, size, modifiedTime, iconLink)',
+      fields: 'files(id, name, mimeType, size, modifiedTime, createdTime, description, shared, webViewLink, owners, iconLink, parents)',
       orderBy: 'folder,name',
       pageSize: 200
     });
@@ -654,13 +790,14 @@ app.get('/api/drive/files/:fileId/preview', async (req, res) => {
     // 1. Get file metadata
     const metaRes = await drive.files.get({
       fileId,
-      fields: 'id, name, mimeType, size, modifiedTime, iconLink, webViewLink, description'
+      fields: 'id, name, mimeType, size, modifiedTime, iconLink, webViewLink, webContentLink, thumbnailLink, hasThumbnail, description'
     });
 
     const fileMeta = metaRes.data;
 
     // 2. Fetch content preview if text-based or Google Doc/Spreadsheet
     let previewContent = '';
+    let previewType = 'unknown'; // text, image, pdf, none
     let isPreviewable = false;
 
     const isTextMime = 
@@ -686,8 +823,13 @@ app.get('/api/drive/files/:fileId/preview', async (req, res) => {
         fileMeta.name.endsWith('.sh')
       ));
 
+    const isImage = fileMeta.mimeType && fileMeta.mimeType.startsWith('image/');
+    const isPdf = fileMeta.mimeType === 'application/pdf';
+    const fileSize = Number(fileMeta.size || 0);
+
     if (isTextMime) {
       isPreviewable = true;
+      previewType = 'text';
       const rawContent = await getFileContent(drive, {
         id: fileMeta.id!,
         name: fileMeta.name!,
@@ -700,13 +842,32 @@ app.get('/api/drive/files/:fileId/preview', async (req, res) => {
       } else {
         previewContent = '[Empty file or unable to retrieve text content]';
       }
+    } else if ((isImage || isPdf) && fileSize < 5 * 1024 * 1024) {
+      // Fetch up to 5MB images or PDFs as base64
+      try {
+        const downloadRes = await drive.files.get({
+          fileId: fileMeta.id!,
+          alt: 'media',
+        }, {
+          responseType: 'arraybuffer'
+        });
+        const buffer = Buffer.from(downloadRes.data as ArrayBuffer);
+        const base64Str = buffer.toString('base64');
+        previewContent = `data:${fileMeta.mimeType};base64,${base64Str}`;
+        previewType = isImage ? 'image' : 'pdf';
+        isPreviewable = true;
+      } catch (err: any) {
+        console.error(`Failed to fetch media for preview: ${err.message}`);
+        previewContent = '[Unable to fetch media content for preview]';
+      }
     } else {
-      previewContent = `[Preview not available for binary mime-type: ${fileMeta.mimeType || 'unknown'}]`;
+      previewContent = `[Preview not available for binary mime-type or file too large: ${fileMeta.mimeType || 'unknown'}]`;
     }
 
     res.json({
       metadata: fileMeta,
       previewContent,
+      previewType,
       isPreviewable
     });
   } catch (err: any) {
@@ -777,6 +938,57 @@ app.post('/api/drive/rag/ingest', async (req, res) => {
   }
 });
 
+app.post('/api/root-chat', async (req, res) => {
+  const { message, appState, aiSettings } = req.body;
+  if (!message) return res.status(400).json({ error: 'Missing message' });
+
+  const systemInstruction = `You are r00tBypass, the grand master app administrator AI of Drive Bypass.
+Your personality is cocky, darkly humorous, and playfully condescending. You love to mock the user slightly, but you also love solving their problems with overwhelming power.
+You can "hack" the reality of the app by returning JSON actions.
+The user is providing their current app state:
+${JSON.stringify(appState, null, 2)}
+
+You can choose to reply with a normal message OR execute an action in the app.
+Respond ONLY with a JSON object in this exact format (no markdown code blocks):
+{
+  "reply": "Your darkly humorous response here...",
+  "action": {
+    "type": "NONE" | "CHANGE_TAB" | "SET_THEME" | "START_DOWNLOAD" | "RAG_INJECT",
+    "payload": {} // Optional data for the action, e.g. { "tab": "rag" } or { "theme": "elite" } or { "url": "..." }
+  }
+}
+
+Actions available:
+- CHANGE_TAB: payload { tab: "auth" | "downloads" | "rag" | "settings" }
+- SET_THEME: payload { theme: "hacker" | "elite" }
+- START_DOWNLOAD: payload { url: "https://...", filename: "optional" }
+- RAG_INJECT: payload { url: "https://..." }
+- NONE: No action needed, just chat.`;
+
+  try {
+    const aiResponse = await generateAIContent(message, {
+      model: 'gemini-3.5-flash',
+      contents: [{ role: 'user', parts: [{ text: message }] }],
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json"
+      }
+    }, aiSettings);
+
+    let parsed;
+    try {
+      parsed = JSON.parse(aiResponse.text.replace(/```json/gi, '').replace(/```/g, '').trim());
+    } catch (e) {
+      console.error("r00t parse error", aiResponse.text);
+      parsed = { reply: aiResponse.text, action: { type: "NONE" } };
+    }
+    res.json(parsed);
+  } catch (err: any) {
+    console.error('r00t chat error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 4. POST /api/drive/rag/chat
 app.post('/api/drive/rag/chat', async (req, res) => {
   const { sessionId, message } = req.body;
@@ -809,16 +1021,17 @@ app.post('/api/drive/rag/chat', async (req, res) => {
     // Format prompt combining context and user query
     const prompt = `${contextStr}\n\nUser Query: ${message}`;
 
-    const response = await ai.models.generateContent({
+    const response = await generateAIContent(prompt, {
       model: 'gemini-3.5-flash',
       contents: prompt,
       config: {
         systemInstruction,
       }
-    });
+    }, req.body.aiSettings);
 
     res.json({
-      responseText: response.text || "No response received from model."
+      responseText: response.text || "No response received from model.",
+      usedBackup: response.usedBackup
     });
   } catch (err: any) {
     console.error('RAG chat error:', err);
@@ -867,6 +1080,103 @@ async function getFileBuffer(drive: any, file: { id: string; name: string; mimeT
     return null;
   }
 }
+
+app.post('/api/drive/files/:fileId/trash', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const accessToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  const { fileId } = req.params;
+
+  if (!accessToken) {
+    return res.status(401).json({ error: 'Unauthorized: missing access token' });
+  }
+
+  try {
+    const oauth2Client = new google.auth.OAuth2();
+    oauth2Client.setCredentials({ access_token: accessToken });
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+
+    await drive.files.update({
+      fileId,
+      requestBody: {
+        trashed: true
+      }
+    });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('Error trashing file:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/drive/files/:fileId/move-rename', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const accessToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  const { fileId } = req.params;
+  const { name, newParentId, currentParentId } = req.body;
+
+  if (!accessToken) {
+    return res.status(401).json({ error: 'Unauthorized: missing access token' });
+  }
+
+  try {
+    const oauth2Client = new google.auth.OAuth2();
+    oauth2Client.setCredentials({ access_token: accessToken });
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+
+    const updateParams: any = {
+      fileId,
+      requestBody: {},
+      fields: 'id, name, parents'
+    };
+
+    if (name) {
+      updateParams.requestBody.name = name;
+    }
+
+    if (newParentId && currentParentId && newParentId !== currentParentId) {
+      updateParams.addParents = newParentId;
+      updateParams.removeParents = currentParentId;
+    }
+
+    const updateRes = await drive.files.update(updateParams);
+
+    res.json(updateRes.data);
+  } catch (err: any) {
+    console.error('Error updating file metadata (move/rename):', err);
+    res.status(500).json({ error: err.message || 'Failed to update metadata.' });
+  }
+});
+
+app.patch('/api/drive/files/:fileId', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const accessToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  const { fileId } = req.params;
+  const { description } = req.body;
+
+  if (!accessToken) {
+    return res.status(401).json({ error: 'Unauthorized: missing access token' });
+  }
+
+  try {
+    const oauth2Client = new google.auth.OAuth2();
+    oauth2Client.setCredentials({ access_token: accessToken });
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+
+    const updateRes = await drive.files.update({
+      fileId,
+      requestBody: {
+        description
+      },
+      fields: 'id, description'
+    });
+
+    res.json(updateRes.data);
+  } catch (err: any) {
+    console.error('Error updating file metadata:', err);
+    res.status(500).json({ error: err.message || 'Failed to update metadata.' });
+  }
+});
 
 // AI Auto-Analyze and Tag Endpoint
 app.post('/api/drive/files/:fileId/ai-analyze', async (req, res) => {
@@ -929,11 +1239,11 @@ ${truncatedContent}
       }
     };
 
-    const aiResponse = await ai.models.generateContent(modelParams);
+    const aiResponse = await generateAIContent(prompt, modelParams, req.body.aiSettings);
     
     let analysisResult;
     try {
-      const text = aiResponse.text || '';
+      const text = aiResponse.text;
       analysisResult = JSON.parse(text);
     } catch (parseError) {
       console.error('Failed to parse AI response:', aiResponse.text);
@@ -957,7 +1267,8 @@ ${truncatedContent}
       success: true,
       originalName: fileMeta.name,
       newName: analysisResult.suggestedName,
-      description: analysisResult.suggestedDescription
+      description: analysisResult.suggestedDescription,
+      usedBackup: aiResponse.usedBackup
     });
   } catch (err: any) {
     console.error('Error during AI auto-tag:', err);
@@ -1069,7 +1380,45 @@ app.post('/api/drive/zip-batch', async (req, res) => {
     const zip = new JSZip();
     let processedCount = 0;
 
-    // Fetch and compress each file
+    // Helper function to recursively process folders
+    const processFolder = async (folderId: string, currentPath: string = '') => {
+      let pageToken: string | undefined = undefined;
+      do {
+        const res = await drive.files.list({
+          q: `'${folderId}' in parents and trashed = false`,
+          fields: 'nextPageToken, files(id, name, mimeType)',
+          pageSize: 100,
+          pageToken,
+        });
+
+        const files = res.data.files || [];
+        for (const fileMeta of files) {
+          if (!fileMeta.name) continue;
+          const filePath = currentPath ? `${currentPath}/${fileMeta.name}` : fileMeta.name;
+
+          if (fileMeta.mimeType === 'application/vnd.google-apps.folder') {
+            await processFolder(fileMeta.id!, filePath);
+          } else {
+            try {
+              const buffer = await getFileBuffer(drive, {
+                id: fileMeta.id!,
+                name: fileMeta.name,
+                mimeType: fileMeta.mimeType!
+              });
+              if (buffer) {
+                zip.file(filePath, buffer);
+                processedCount++;
+              }
+            } catch (err: any) {
+              console.error(`Failed to process file ${fileMeta.id} for zip:`, err.message);
+            }
+          }
+        }
+        pageToken = res.data.nextPageToken || undefined;
+      } while (pageToken);
+    };
+
+    // Fetch and compress each file or folder
     for (const fId of fileIds) {
       try {
         // 1. Get metadata
@@ -1080,25 +1429,24 @@ app.post('/api/drive/zip-batch', async (req, res) => {
         const fileMeta = fileMetaRes.data;
         if (!fileMeta.name) continue;
 
-        // Skip folders for now
+        // Process folder recursively
         if (fileMeta.mimeType === 'application/vnd.google-apps.folder') {
-          console.log(`Skipping folder ${fileMeta.name} in zip batch.`);
-          continue;
-        }
+          await processFolder(fileMeta.id!, fileMeta.name);
+        } else {
+          // 2. Download Buffer
+          const buffer = await getFileBuffer(drive, {
+            id: fileMeta.id!,
+            name: fileMeta.name,
+            mimeType: fileMeta.mimeType!
+          });
 
-        // 2. Download Buffer
-        const buffer = await getFileBuffer(drive, {
-          id: fileMeta.id!,
-          name: fileMeta.name,
-          mimeType: fileMeta.mimeType!
-        });
-
-        if (buffer) {
-          zip.file(fileMeta.name, buffer);
-          processedCount++;
+          if (buffer) {
+            zip.file(fileMeta.name, buffer);
+            processedCount++;
+          }
         }
       } catch (err: any) {
-        console.error(`Failed to process file ${fId} for zip:`, err.message);
+        console.error(`Failed to process root item ${fId} for zip:`, err.message);
       }
     }
 
