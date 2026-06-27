@@ -236,7 +236,7 @@ app.post('/api/download', async (req, res) => {
           id: fileMeta.id,
           name: fileMeta.name!,
           mimeType: fileMeta.mimeType!
-        });
+        }, req.body.aiSettings);
 
         if (content && content.trim().length > 0) {
           const truncatedContent = content.length > 30000 
@@ -575,7 +575,7 @@ async function fetchFolderFilesRecursively(
 }
 
 // Helper to get file content
-async function getFileContent(drive: any, file: { id: string; name: string; mimeType: string }) {
+async function getFileContent(drive: any, file: { id: string; name: string; mimeType: string }, aiSettings?: any) {
   try {
     // If it's a Google Doc, export it as text
     if (file.mimeType === 'application/vnd.google-apps.document') {
@@ -652,7 +652,7 @@ async function getFileContent(drive: any, file: { id: string; name: string; mime
             ]
           }
         ]
-      }, req.body?.aiSettings);
+      }, aiSettings);
       console.log(`AI analysis completed for ${file.name}`);
       
       return response.text || '[Analysis completed but no text returned]';
@@ -834,7 +834,7 @@ app.get('/api/drive/files/:fileId/preview', async (req, res) => {
         id: fileMeta.id!,
         name: fileMeta.name!,
         mimeType: fileMeta.mimeType!
-      });
+      }, req.body?.aiSettings);
       if (rawContent) {
         previewContent = rawContent.length > 8000 
           ? rawContent.slice(0, 8000) + '\n\n[Content truncated for preview...]' 
@@ -903,7 +903,7 @@ app.post('/api/drive/rag/ingest', async (req, res) => {
 
     const downloadPromises = filesToIngest.map(file => {
       return activeDownloadQueue.add(async () => {
-        const content = await getFileContent(drive, file);
+        const content = await getFileContent(drive, file, req.body?.aiSettings);
         if (content !== null && content.trim().length > 0) {
           const truncatedContent = content.length > 80000 
             ? content.slice(0, 80000) + '\n[Content Truncated due to size limits]' 
@@ -1205,7 +1205,7 @@ app.post('/api/drive/files/:fileId/ai-analyze', async (req, res) => {
       id: fileMeta.id!,
       name: fileMeta.name!,
       mimeType: fileMeta.mimeType!
-    });
+    }, req.body?.aiSettings);
 
     if (!content || content.trim().length === 0) {
       return res.status(400).json({ error: 'File is empty or content could not be extracted.' });
@@ -1317,7 +1317,7 @@ app.post('/api/drive/rag/ingest-batch', async (req, res) => {
     const ingestedFiles: Array<{ name: string; path: string; content: string }> = [];
     const downloadPromises = filesToIngest.map(file => {
       return activeDownloadQueue.add(async () => {
-        const content = await getFileContent(drive, file);
+        const content = await getFileContent(drive, file, req.body?.aiSettings);
         if (content !== null && content.trim().length > 0) {
           const truncatedContent = content.length > 80000 
             ? content.slice(0, 80000) + '\n[Content Truncated due to size limits]' 

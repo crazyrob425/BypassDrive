@@ -112,6 +112,7 @@ export default function App() {
   const [moveFolderId, setMoveFolderId] = useState('');
   const [renameMoveLoading, setRenameMoveLoading] = useState(false);
   const [allFolders, setAllFolders] = useState<any[]>([]);
+  const [cutFiles, setCutFiles] = useState<{id: string, parentId: string}[]>([]);
   
   // Context Menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -224,6 +225,115 @@ export default function App() {
       loadDriveData(currentFolderId);
     }
   }, [user, activeTab, currentFolderId]);
+
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement || 
+        e.target instanceof HTMLTextAreaElement || 
+        e.target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+      
+      if (activeTab !== 'explorer') return;
+
+      if (e.key === 'Escape') {
+        if (selectedFileIds.length > 0) {
+          setSelectedFileIds([]);
+        }
+      }
+
+      if (e.key === 'Delete') {
+        if (selectedFileIds.length > 0) {
+          if (window.confirm(`Are you sure you want to move ${selectedFileIds.length} items to trash?`)) {
+            setBatchActionLoading(true);
+            try {
+              const token = await getAccessToken();
+              if (token) {
+                for (const id of selectedFileIds) {
+                  await fetch(`/api/drive/files/${id}/trash`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                  });
+                }
+                setSelectedFileIds([]);
+                loadDriveData(currentFolderId);
+              }
+            } catch (err) {
+              console.error('Batch delete error', err);
+            } finally {
+              setBatchActionLoading(false);
+            }
+          }
+        }
+      }
+
+      if (e.ctrlKey && (e.key.toLowerCase() === 'x' || e.key.toLowerCase() === 'z')) {
+        if (selectedFileIds.length > 0) {
+          const filesToCut = explorerFiles
+            .filter(f => selectedFileIds.includes(f.id))
+            .map(f => ({
+               id: f.id, 
+               parentId: (f.parents && f.parents.length > 0) ? f.parents[0] : currentFolderId 
+            }));
+          setCutFiles(filesToCut);
+        }
+      }
+
+      if (e.ctrlKey && e.key.toLowerCase() === 'v') {
+        if (cutFiles.length > 0) {
+          setBatchActionLoading(true);
+          try {
+            const token = await getAccessToken();
+            if (token) {
+              for (const cutFile of cutFiles) {
+                if (cutFile.parentId === currentFolderId) continue;
+
+                await fetch(`/api/drive/files/${cutFile.id}/move-rename`, {
+                  method: 'PATCH',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({
+                    newParentId: currentFolderId,
+                    currentParentId: cutFile.parentId
+                  })
+                });
+              }
+              setCutFiles([]);
+              loadDriveData(currentFolderId);
+            }
+          } catch (err) {
+            console.error('Paste error', err);
+          } finally {
+            setBatchActionLoading(false);
+          }
+        }
+      }
+
+      if (e.key === 'Enter') {
+        if (selectedFileIds.length === 1) {
+          const fileId = selectedFileIds[0];
+          const file = explorerFiles.find(f => f.id === fileId);
+          if (file) {
+            if (previewFileId === fileId) {
+              if (file.webViewLink) {
+                window.open(file.webViewLink, '_blank');
+              }
+            } else {
+              handleFilePreviewClick(fileId);
+            }
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTab, selectedFileIds, cutFiles, explorerFiles, currentFolderId, previewFileId]);
 
   const handleLogin = async () => {
     setIsLoggingIn(true);
@@ -585,7 +695,7 @@ export default function App() {
       
       // Reload current folder contents to show updated metadata
       if (currentFolderId !== 'search') {
-        fetchFolderContents(currentFolderId);
+        loadDriveData(currentFolderId);
       }
     } catch (err) {
       console.error('Error during batch AI tagging:', err);
@@ -805,7 +915,7 @@ export default function App() {
         const data = await res.json();
         // Add zip to current folder if we are not in search
         if (currentFolderId !== 'search') {
-          fetchFolderContents(currentFolderId);
+          loadDriveData(currentFolderId);
         }
       } else {
         console.error('Compression failed');
